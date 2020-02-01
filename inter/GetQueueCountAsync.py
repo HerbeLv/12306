@@ -1,4 +1,6 @@
-# coding=utf-8
+import TickerConfig
+
+[]# coding=utf-8
 import datetime
 import sys
 import time
@@ -6,8 +8,6 @@ from collections import OrderedDict
 
 import wrapcache
 
-from config.TicketEnmu import ticket
-from config.ticketConf import _get_yaml
 from inter.ConfirmSingleForQueueAsys import confirmSingleForQueueAsys
 
 
@@ -65,7 +65,7 @@ class getQueueCountAsync:
         data['train_date'] = "{0} {1} {2} {3} 00:00:00 GMT+0800 (中国标准时间)".format(
             new_train_date[0],
             new_train_date[1],
-            new_train_date[2],
+            new_train_date[2] if len(new_train_date[2]) is 2 else f"0{new_train_date[2]}",
             new_train_date[4],
             time.strftime("%H:%M:%S", time.localtime(time.time()))
         ),
@@ -96,6 +96,12 @@ class getQueueCountAsync:
                     ticket_data = getQueueCountAsyncResult["data"]["ticket"]
                     ticket_split = sum(map(self.conversion_int, ticket_data.split(","))) if ticket_data.find(
                         ",") != -1 else ticket_data
+                    if int(ticket_split) is 0:
+                        # 增加余票数为0时，将车次加入小黑屋
+                        wrapcache.set(key=self.train_no, value=datetime.datetime.now(),
+                                      timeout=TickerConfig.TICKET_BLACK_LIST_TIME * 60)
+                        print(f"排队失败，当前余票数为{ticket_split}张")
+                        return
                     print(u"排队成功, 当前余票还剩余: {0} 张".format(ticket_split))
                     c = confirmSingleForQueueAsys(session=self.session,
                                                   passengerTicketStr=self.passengerTicketStr,
@@ -107,11 +113,11 @@ class getQueueCountAsync:
                 else:
                     print(u"排队发现未知错误{0}，将此列车 {1}加入小黑屋".format(getQueueCountAsyncResult, self.train_no))
                     wrapcache.set(key=self.train_no, value=datetime.datetime.now(),
-                                  timeout=int(_get_yaml()["ticket_black_list_time"]) * 60)
+                                  timeout=TickerConfig.TICKET_BLACK_LIST_TIME * 60)
             elif "messages" in getQueueCountAsyncResult and getQueueCountAsyncResult["messages"]:
                 print(u"排队异常，错误信息：{0}, 将此列车 {1}加入小黑屋".format(getQueueCountAsyncResult["messages"][0], self.train_no))
                 wrapcache.set(key=self.train_no, value=datetime.datetime.now(),
-                              timeout=int(_get_yaml()["ticket_black_list_time"]) * 60)
+                              timeout=TickerConfig.TICKET_BLACK_LIST_TIME * 60)
             else:
                 if "validateMessages" in getQueueCountAsyncResult and getQueueCountAsyncResult["validateMessages"]:
                     print(str(getQueueCountAsyncResult["validateMessages"]))

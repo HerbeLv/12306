@@ -5,8 +5,13 @@ import time
 from collections import OrderedDict
 import wrapcache
 
-from config.ticketConf import _get_yaml
+import TickerConfig
+from config.TicketEnmu import ticket
+from config.emailConf import sendEmail
+from config.serverchanConf import sendServerChan
+from config.urlConf import urls
 from inter.ConfirmSingleForQueue import confirmSingleForQueue
+from myException.ticketIsExitsException import ticketIsExitsException
 
 
 def conversion_int(str):
@@ -52,10 +57,10 @@ class getQueueCount:
         else:
             new_train_date = list(filter(None, str(time.asctime(time.strptime(self.station_dates, "%Y-%m-%d"))).split(" ")))
         data = OrderedDict()
-        data['train_date'] = "{0} {1} 0{2} {3} 00:00:00 GMT+0800 (中国标准时间)".format(
+        data['train_date'] = "{0} {1} {2} {3} 00:00:00 GMT+0800 (中国标准时间)".format(
             new_train_date[0],
             new_train_date[1],
-            new_train_date[2],
+            new_train_date[2] if len(new_train_date[2]) is 2 else f"0{new_train_date[2]}",
             new_train_date[4],
         ),
         data['train_no'] = self.ticketInfoForPassengerForm['queryLeftTicketRequestDTO']['train_no'],
@@ -83,7 +88,11 @@ class getQueueCount:
                 ticket = getQueueCountResult["data"]["ticket"]
                 ticket_split = sum(map(conversion_int, ticket.split(","))) if ticket.find(",") != -1 else ticket
                 countT = getQueueCountResult["data"]["countT"]
-                # if int(countT) is 0:
+                if int(ticket_split) is 0:
+                    wrapcache.set(key=self.train_no, value=datetime.datetime.now(),
+                                  timeout=TickerConfig.TICKET_BLACK_LIST_TIME * 60)
+                    print(f"排队失败，当前余票数还剩: {ticket_split} 张")
+                    return
                 print(u"排队成功, 你排在: {1}位, 当前余票还剩余: {0} 张".format(ticket_split, countT))
                 csf = confirmSingleForQueue(self.session, self.ifShowPassCodeTime, self.is_need_code, self.token,
                                             self.set_type, self.ticket_peoples, self.ticketInfoForPassengerForm,
@@ -94,15 +103,47 @@ class getQueueCount:
             else:
                 print(u"排队发现未知错误{0}，将此列车 {1}加入小黑屋".format(getQueueCountResult, self.train_no))
                 wrapcache.set(key=self.train_no, value=datetime.datetime.now(),
-                              timeout=int(_get_yaml()["ticket_black_list_time"]) * 60)
+                              timeout=TickerConfig.TICKET_BLACK_LIST_TIME * 60)
         elif "messages" in getQueueCountResult and getQueueCountResult["messages"]:
             print(u"排队异常，错误信息：{0}, 将此列车 {1}加入小黑屋".format(getQueueCountResult["messages"][0], self.train_no))
             wrapcache.set(key=self.train_no, value=datetime.datetime.now(),
-                          timeout=int(_get_yaml()["ticket_black_list_time"]) * 60)
+                          timeout=TickerConfig.TICKET_BLACK_LIST_TIME * 60)
         else:
             if "validateMessages" in getQueueCountResult and getQueueCountResult["validateMessages"]:
                 print(str(getQueueCountResult["validateMessages"]))
                 wrapcache.set(key=self.train_no, value=datetime.datetime.now(),
-                              timeout=int(_get_yaml()["ticket_black_list_time"]) * 60)
+                              timeout=TickerConfig.TICKET_BLACK_LIST_TIME * 60)
             else:
                 print(u"未知错误 {0}".format("".join(getQueueCountResult)))
+
+
+class queryQueueByAfterNate:
+    def __init__(self, session):
+        """
+        候补排队
+        :param session:
+        """
+        self.session = session
+
+    def sendQueryQueueByAfterNate(self):
+        for i in range(10):
+            queryQueueByAfterNateRsp = self.session.httpClint.send(urls.get("queryQueue"))
+            if not queryQueueByAfterNateRsp.get("status"):
+                print("".join(queryQueueByAfterNateRsp.get("messages")) or queryQueueByAfterNateRsp.get("validateMessages"))
+                time.sleep(1)
+            else:
+                sendEmail(ticket.WAIT_ORDER_SUCCESS)
+                sendServerChan(ticket.WAIT_ORDER_SUCCESS)
+                raise ticketIsExitsException(ticket.WAIT_AFTER_NATE_SUCCESS)
+
+
+if __name__ == '__main__':
+    new_train_date = list(filter(None, str(time.asctime(time.strptime("2019-10-07", "%Y-%m-%d"))).split(" ")))
+    print(new_train_date)
+    train_date = "{0} {1} {2} {3} 00:00:00 GMT+0800 (中国标准时间)".format(
+        new_train_date[0],
+        new_train_date[1],
+        new_train_date[2] if len(new_train_date[2]) is 2 else f"0{new_train_date[2]}",
+        new_train_date[4],
+    )
+    print(train_date)
